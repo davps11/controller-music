@@ -43,11 +43,9 @@ class SpotifyVolumeController:
             steps = max(1, int(duration * 60))
             step = (target - start) / steps
             delay = duration / steps
-
             for i in range(steps):
                 self.set_volume(start + step * (i + 1))
                 await asyncio.sleep(delay)
-
 
 
 class TransmissionState:
@@ -76,16 +74,21 @@ class TrackAudioMonitor:
         self.on_start = on_start
         self.on_end = on_end
         self.on_status = on_status
-        self.running = True
+        self.running = False
+        self.listener_task = None
 
     async def connect(self):
+        self.running = True
         while self.running:
             try:
                 self.on_status("Connecting…")
                 async with websockets.connect(self.uri) as ws:
                     self.on_status("Connected")
-                    await self.listen(ws)
+                    self.listener_task = asyncio.create_task(self.listen(ws))
+                    await self.listener_task
             except Exception as e:
+                if not self.running:
+                    break
                 self.on_status(f"Disconnected: {e}")
                 await asyncio.sleep(2)
 
@@ -98,16 +101,20 @@ class TrackAudioMonitor:
     async def handle_event(self, event):
         event_type = event.get("type")
         value = event.get("value", {})
-
         before = self.state.active()
         self.state.update(event_type, value)
         after = self.state.active()
-
         if not before and after:
             await self.on_start()
         elif before and not after:
             await self.on_end()
 
+    def stop(self):
+        self.running = False
+        if self.listener_task:
+            self.listener_task.cancel()
+            self.listener_task = None
+        self.state = TransmissionState()
 
 
 class AudioDuckController:
@@ -118,15 +125,24 @@ class AudioDuckController:
         self.fade_down = 0.4
         self.fade_up = 0.4
         self.original = 100
+        self.monitor = None
 
     async def start(self, status_callback):
-        monitor = TrackAudioMonitor(
+        self.monitor = TrackAudioMonitor(
             self.uri,
             self.lower_volume,
             self.restore_volume,
             status_callback
         )
-        await monitor.connect()
+        await self.monitor.connect()
+
+    def force_restore(self):
+        self.spotify.set_volume(self.original)
+
+    def stop(self):
+        if self.monitor:
+            self.monitor.stop()
+        self.force_restore()
 
     async def lower_volume(self):
         self.original = self.spotify.get_volume()
@@ -134,7 +150,6 @@ class AudioDuckController:
 
     async def restore_volume(self):
         await self.spotify.fade_to(self.original, self.fade_up)
-
 
 
 class DuckingUI(ctk.CTk):
@@ -148,75 +163,48 @@ class DuckingUI(ctk.CTk):
         self.controller = AudioDuckController()
         self.monitor_thread = None
 
-        # Title
         ctk.CTkLabel(self, text="🎵 Controller Music",
                      font=ctk.CTkFont(size=26, weight="bold")).pack(pady=10)
 
-        # Status
         self.status_label = ctk.CTkLabel(self, text="Ready",
                                          font=ctk.CTkFont(size=14, weight="bold"),
                                          text_color="#00aaff")
         self.status_label.pack(pady=5)
 
-
         self.vol_var = ctk.DoubleVar(value=5)
-
         vol_frame = ctk.CTkFrame(self, fg_color="transparent")
         vol_frame.pack(pady=5)
-
         ctk.CTkLabel(vol_frame, text="Mute Volume (%)").pack()
-
-        self.vol_slider = ctk.CTkSlider(
-            vol_frame, from_=0, to=100, variable=self.vol_var,
-            command=lambda v: self.update_values()
-        )
+        self.vol_slider = ctk.CTkSlider(vol_frame, from_=0, to=100,
+                                        variable=self.vol_var,
+                                        command=lambda v: self.update_values())
         self.vol_slider.pack(pady=5)
-
-        self.vol_label = ctk.CTkLabel(
-            vol_frame, text=f"{self.vol_var.get():.1f}%"
-        )
+        self.vol_label = ctk.CTkLabel(vol_frame, text=f"{self.vol_var.get():.1f}%")
         self.vol_label.pack()
 
-
         self.fade_down_var = ctk.DoubleVar(value=0.1)
-
         fade_down_frame = ctk.CTkFrame(self, fg_color="transparent")
         fade_down_frame.pack(pady=5)
-
         ctk.CTkLabel(fade_down_frame, text="Fade Down (s)").pack()
-
-        self.fade_down_slider = ctk.CTkSlider(
-            fade_down_frame, from_=0.1, to=2.0,
-            variable=self.fade_down_var,
-            command=lambda v: self.update_values()
-        )
+        self.fade_down_slider = ctk.CTkSlider(fade_down_frame, from_=0.1, to=2.0,
+                                              variable=self.fade_down_var,
+                                              command=lambda v: self.update_values())
         self.fade_down_slider.pack(pady=5)
-
-        self.fade_down_label = ctk.CTkLabel(
-            fade_down_frame, text=f"{self.fade_down_var.get():.2f}s"
-        )
+        self.fade_down_label = ctk.CTkLabel(fade_down_frame,
+                                            text=f"{self.fade_down_var.get():.2f}s")
         self.fade_down_label.pack()
 
-
         self.fade_up_var = ctk.DoubleVar(value=0.1)
-
         fade_up_frame = ctk.CTkFrame(self, fg_color="transparent")
         fade_up_frame.pack(pady=5)
-
         ctk.CTkLabel(fade_up_frame, text="Fade Up (s)").pack()
-
-        self.fade_up_slider = ctk.CTkSlider(
-            fade_up_frame, from_=0.1, to=2.0,
-            variable=self.fade_up_var,
-            command=lambda v: self.update_values()
-        )
+        self.fade_up_slider = ctk.CTkSlider(fade_up_frame, from_=0.1, to=2.0,
+                                            variable=self.fade_up_var,
+                                            command=lambda v: self.update_values())
         self.fade_up_slider.pack(pady=5)
-
-        self.fade_up_label = ctk.CTkLabel(
-            fade_up_frame, text=f"{self.fade_up_var.get():.2f}s"
-        )
+        self.fade_up_label = ctk.CTkLabel(fade_up_frame,
+                                          text=f"{self.fade_up_var.get():.2f}s")
         self.fade_up_label.pack()
-
 
         self.start_btn = ctk.CTkButton(self, text="Start Monitoring",
                                        command=self.start_monitor)
@@ -230,12 +218,9 @@ class DuckingUI(ctk.CTk):
         self.update_values()
 
     def update_values(self):
-        # Update controller values
         self.controller.target = self.vol_var.get()
         self.controller.fade_down = self.fade_down_var.get()
         self.controller.fade_up = self.fade_up_var.get()
-
-        # Update labels
         self.vol_label.configure(text=f"{self.vol_var.get():.1f}%")
         self.fade_down_label.configure(text=f"{self.fade_down_var.get():.2f}s")
         self.fade_up_label.configure(text=f"{self.fade_up_var.get():.2f}s")
@@ -243,7 +228,6 @@ class DuckingUI(ctk.CTk):
     def start_monitor(self):
         if self.monitor_thread and self.monitor_thread.is_alive():
             return
-
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self.status_label.configure(text="Starting…", text_color="#ffff00")
@@ -255,6 +239,7 @@ class DuckingUI(ctk.CTk):
         self.monitor_thread.start()
 
     def stop_monitor(self):
+        self.controller.stop()
         self.status_label.configure(text="Stopped", text_color="#ff4444")
         self.start_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
@@ -263,8 +248,13 @@ class DuckingUI(ctk.CTk):
         color = "#00ff00" if "Connected" in msg else "#ff4444"
         self.status_label.configure(text=msg, text_color=color)
 
+    def on_close(self):
+        self.controller.stop()
+        self.destroy()
+
 
 if __name__ == "__main__":
     ctk.set_appearance_mode("Dark")
     app = DuckingUI()
+    app.protocol("WM_DELETE_WINDOW", app.on_close)
     app.mainloop()
