@@ -1,5 +1,5 @@
 Controller Music
-Automatic Spotify volume ducking for TrackAudio transmissions
+automatic Spotify volume ducking for TrackAudio transmissions
 Controller Music is a lightweight Windows utility that automatically lowers your Spotify volume whenever TrackAudio detects a radio transmission — whether it’s you transmitting (TX) or any aircraft transmitting (RX).
 When the frequency goes quiet, your music fades smoothly back to normal.
 
