@@ -68,12 +68,13 @@ class TransmissionState:
 
 
 class TrackAudioMonitor:
-    def __init__(self, uri, on_start, on_end, on_status):
+    def __init__(self, uri, on_start, on_end, on_status, on_disconnect):
         self.uri = uri
         self.state = TransmissionState()
         self.on_start = on_start
         self.on_end = on_end
         self.on_status = on_status
+        self.on_disconnect = on_disconnect
         self.running = False
         self.listener_task = None
 
@@ -86,11 +87,11 @@ class TrackAudioMonitor:
                     self.on_status("Connected")
                     self.listener_task = asyncio.create_task(self.listen(ws))
                     await self.listener_task
-            except Exception as e:
+            except Exception:
                 if not self.running:
                     break
-                self.on_status(f"Disconnected: {e}")
-                await asyncio.sleep(2)
+                self.on_disconnect()
+                break
 
     async def listen(self, ws):
         while self.running:
@@ -129,12 +130,13 @@ class AudioDuckController:
         self.fade_task = None
         self.fades_enabled = True
 
-    async def start(self, status_callback):
+    async def start(self, status_callback, disconnect_callback):
         self.monitor = TrackAudioMonitor(
             self.uri,
             self.lower_volume,
             self.restore_volume,
-            status_callback
+            status_callback,
+            disconnect_callback
         )
         await self.monitor.connect()
 
@@ -171,12 +173,17 @@ class AudioDuckController:
         else:
             self.spotify.set_volume(self.original)
 
+    async def test_duck(self):
+        await self.lower_volume()
+        await asyncio.sleep(1)
+        await self.restore_volume()
+
 
 class DuckingUI(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Controller Music")
-        self.geometry("420x560")
+        self.geometry("420x600")
         self.resizable(False, False)
         self.configure(fg_color="#1a1a1a")
 
@@ -240,6 +247,10 @@ class DuckingUI(ctk.CTk):
                                       state="disabled")
         self.stop_btn.pack()
 
+        self.test_btn = ctk.CTkButton(self, text="Test",
+                                      command=self.run_test_duck)
+        self.test_btn.pack(pady=20)
+
         self.update_values()
 
     def toggle_fades(self):
@@ -265,7 +276,7 @@ class DuckingUI(ctk.CTk):
         self.status_label.configure(text="Starting…", text_color="#ffff00")
 
         def run():
-            asyncio.run(self.controller.start(self.update_status))
+            asyncio.run(self.controller.start(self.update_status, self.handle_disconnect))
 
         self.monitor_thread = threading.Thread(target=run, daemon=True)
         self.monitor_thread.start()
@@ -276,9 +287,20 @@ class DuckingUI(ctk.CTk):
         self.start_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
 
+    def run_test_duck(self):
+        def run():
+            asyncio.run(self.controller.test_duck())
+        threading.Thread(target=run, daemon=True).start()
+
     def update_status(self, msg):
         color = "#00ff00" if "Connected" in msg else "#ff4444"
         self.status_label.configure(text=msg, text_color=color)
+
+    def handle_disconnect(self):
+        self.controller.stop()
+        self.status_label.configure(text="Lost connection", text_color="#ff4444")
+        self.start_btn.configure(state="normal")
+        self.stop_btn.configure(state="disabled")
 
     def on_close(self):
         self.controller.stop()
