@@ -161,6 +161,7 @@ class AudioDuckController:
             self.fade_task = asyncio.create_task(
                 self.spotify.fade_to(self.target, self.fade_down)
             )
+            await self.fade_task
         else:
             self.spotify.set_volume(self.target)
 
@@ -170,6 +171,7 @@ class AudioDuckController:
             self.fade_task = asyncio.create_task(
                 self.spotify.fade_to(self.original, self.fade_up)
             )
+            await self.fade_task
         else:
             self.spotify.set_volume(self.original)
 
