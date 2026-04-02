@@ -121,11 +121,13 @@ class AudioDuckController:
     def __init__(self, uri="ws://localhost:49080/ws"):
         self.spotify = SpotifyVolumeController()
         self.uri = uri
-        self.target = 10
-        self.fade_down = 0.4
-        self.fade_up = 0.4
+        self.target = 5
+        self.fade_down = 0.1
+        self.fade_up = 0.1
         self.original = 100
         self.monitor = None
+        self.fade_task = None
+        self.fades_enabled = True
 
     async def start(self, status_callback):
         self.monitor = TrackAudioMonitor(
@@ -136,27 +138,45 @@ class AudioDuckController:
         )
         await self.monitor.connect()
 
+    def cancel_fade(self):
+        if self.fade_task and not self.fade_task.done():
+            self.fade_task.cancel()
+        self.fade_task = None
+
     def force_restore(self):
         self.spotify.set_volume(self.original)
 
     def stop(self):
         if self.monitor:
             self.monitor.stop()
+        self.cancel_fade()
         self.force_restore()
 
     async def lower_volume(self):
+        self.cancel_fade()
         self.original = self.spotify.get_volume()
-        await self.spotify.fade_to(self.target, self.fade_down)
+        if self.fades_enabled:
+            self.fade_task = asyncio.create_task(
+                self.spotify.fade_to(self.target, self.fade_down)
+            )
+        else:
+            self.spotify.set_volume(self.target)
 
     async def restore_volume(self):
-        await self.spotify.fade_to(self.original, self.fade_up)
+        self.cancel_fade()
+        if self.fades_enabled:
+            self.fade_task = asyncio.create_task(
+                self.spotify.fade_to(self.original, self.fade_up)
+            )
+        else:
+            self.spotify.set_volume(self.original)
 
 
 class DuckingUI(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Controller Music")
-        self.geometry("420x500")
+        self.geometry("420x560")
         self.resizable(False, False)
         self.configure(fg_color="#1a1a1a")
 
@@ -181,6 +201,11 @@ class DuckingUI(ctk.CTk):
         self.vol_slider.pack(pady=5)
         self.vol_label = ctk.CTkLabel(vol_frame, text=f"{self.vol_var.get():.1f}%")
         self.vol_label.pack()
+
+        self.fade_toggle = ctk.CTkSwitch(self, text="Enable Fades",
+                                         command=self.toggle_fades)
+        self.fade_toggle.select()
+        self.fade_toggle.pack(pady=10)
 
         self.fade_down_var = ctk.DoubleVar(value=0.1)
         fade_down_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -216,6 +241,13 @@ class DuckingUI(ctk.CTk):
         self.stop_btn.pack()
 
         self.update_values()
+
+    def toggle_fades(self):
+        enabled = self.fade_toggle.get() == 1
+        self.controller.fades_enabled = enabled
+        state = "normal" if enabled else "disabled"
+        self.fade_down_slider.configure(state=state)
+        self.fade_up_slider.configure(state=state)
 
     def update_values(self):
         self.controller.target = self.vol_var.get()
