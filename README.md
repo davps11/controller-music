@@ -21,9 +21,6 @@ If TrackAudio restarts, the app reconnects automatically.
   Simple, modern UI  
 Clean sliders, live value labels, and clear status indicators.
 
-  Works with any simulator using TrackAudio  
-MSFS, X‑Plane, P3D, EuroScope, etc.
-
   Installation
 Download the latest release from the Releases section.
 
